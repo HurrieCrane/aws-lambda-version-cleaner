@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+
+# The arn of the lambda to clean
+
+# =========== APPLICATION PARAMS  ========== #
+
+AUTO_ACCEPT=false
+ERROR_DELETING_VERSION=false
+
+# =========== ARGS VARIABLES ========= #
+
+SHORTOPTS="a:"
+LONGOPTS="auto-accept:"
+
+ARGS=$(getopt -s bash --options $SHORTOPTS --longoptions $LONGOPTS --name $PROGNAME -- "$@")
+while [[ $1 != '' ]]; do
+    case $1 in
+        -a|--auto-accept)
+            AUTO_ACCEPT=true
+        ;;
+        *)
+            if [[ $2 == "" ]]; then
+                LAMBDA_NAME=$1
+            else 
+                printf "\e[31mUnknown parameter $1\n"
+                exit 1
+            fi
+        ;;
+    esac
+    shift
+done
+shift 
+
+configure_env() {
+    # check if jq is installed
+    jq_installed=$(which jq)
+    if [[ -z ${jq_installed} ]]; then
+        printf "\e[31mJQ is not installed, please install it\n"
+        exit 1
+    fi
+}
+
+delete_lambda_version() {
+    version_string=$1
+    deleted=$(eval $(aws lambda delete-function --function-name $1))
+    if [[ $deleted == 1 ]]; then
+        ERROR_DELETING_VERSION=true
+    fi
+}
+
+get_all_lambda_versions() {
+    lambda_versions=$(aws lambda list-versions-by-function --function-name $LAMBDA_NAME | jq -c -r '.["Versions"][]["FunctionArn"]')
+    for row in $(echo "${lambda_versions}"); do 
+        if [[ $ERROR_DELETING_VERSION == true ]]; then
+            printf "\e[31emERROR deleting version\n"
+            exit 1
+        fi
+
+        if [[ ! "$row" =~ ^.+LATEST ]]; then # if arn !endWith LATEST
+            # just delete straight away
+            if [[ $AUTO_ACCEPT == true  ]]; then
+                printf "Deleting ${row}\n"
+                delete_lambda_version $row
+                continue
+            fi
+
+            answer=""
+            while [[ "$answer" != "y" ]] && [[ "$answer" != "n" ]]; do 
+                echo $answer
+                printf $row
+                printf " Delete (y/n)\n"
+                read answer
+            done 
+
+            if [[ "$answer" == "y"  ]]; then
+                delete_lambda_version "$row"
+            elif [[ "$answer" == "n"  ]]; then
+                printf "Skipping\b"
+            fi
+        fi
+    done
+    
+}
+
+configure_env
+
+if [[ $LAMBDA_NAME == ""  ]]; then
+    printf "The Lambda name must be specificed\n"
+    exit 1
+fi
+
+if [[ $AUTO_ACCEPT == true ]]; then
+    printf "\e[32mWill auto-accept lambda version deletion\n"
+fi
+
+# Perform actual function
+get_all_lambda_versions
+
